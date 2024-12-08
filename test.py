@@ -1,7 +1,11 @@
 from a2c_continuous import ActorCritic
-from envs.spider.SpiderEnv_many import SpiderEnv
+from envs.mujoco_env import MujocoEnv
+import numpy as np
 
 
 
-env = SpiderEnv()
-model = ActorCritic()
+env = MujocoEnv("/home/aadia/nmepproject/envs/xmls/scene.xml")
+model = ActorCritic(np.zeros((16,)), np.zeros((8,)), "model")
+
+
+model.train(env, 20002)

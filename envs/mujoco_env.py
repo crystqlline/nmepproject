@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, NamedTuple, Optional
 
-import dm_env
+import imageio
+from dm_env import specs, TimeStep, StepType
+import dm_env 
 import mujoco
 import numpy as np
 import xml.etree.ElementTree as ET
@@ -20,8 +22,8 @@ class RenderingConfig:
             integer. Defaults to -1, which uses the free camera.
     """
 
-    height: int = 1920
-    width: int = 1080
+    height: int = 480
+    width: int = 640
     camera_id: str | int = -1
 
 
@@ -34,7 +36,7 @@ class MujocoEnv(dm_env.Environment):
     - observation_spec(self)
     - action_spec(self)
     """
-
+    
     def __init__(
         self,
         xml_path: Path,
@@ -43,6 +45,7 @@ class MujocoEnv(dm_env.Environment):
         control_dt: float = 0.1,
         time_limit: float = float("inf"),
         rendering_config: Optional[RenderingConfig] = None,
+        max_timesteps = 2000,
     ):
         """Initializes a new MujocoEnv.
 
@@ -69,11 +72,12 @@ class MujocoEnv(dm_env.Environment):
 
         self._data = mujoco.MjData(self._model)
 
-        for i in range(len(self._Kq)):
-            actuator_name = f"actuator{i+1}"
-            actuator_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
-            self._model.actuator_gainprm[actuator_id, 0] = self._Kq[i]
-            self._model.actuator_biasprm[actuator_id, 0] = self._Kqd[i]
+        #self._Kq = self._data.geom()
+        # for i in range(len(self._Kq)):
+        #     actuator_name = f"actuator{i+1}"
+        #     actuator_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+        #     self._model.actuator_gainprm[actuator_id, 0] = self._Kq[i]
+        #     self._model.actuator_biasprm[actuator_id, 0] = self._Kqd[i]
 
 
         self._model.opt.timestep = physics_dt
@@ -87,6 +91,16 @@ class MujocoEnv(dm_env.Environment):
         self._viewer: Optional[mujoco.Renderer] = None
         self._scene_option = mujoco.MjvOption()
         self._info = {}
+
+
+        self.camera = mujoco.MjvCamera()
+        self.camera.type = mujoco.mjtCamera.mjCAMERA_FIXED
+        self.camera_id =  0 #mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_CAMERA, "chriscamera")
+        self.camera.fixedcamid = self.camera_id
+        
+
+        self.max_timesteps = max_timesteps
+        self.timesteps = 0
 
     def render(
         self,
@@ -122,6 +136,7 @@ class MujocoEnv(dm_env.Environment):
                 type (a value in the `mjtObj` enum). Background pixels are labeled
                 (-1, -1).
         """
+
         if self._viewer is None:
             self._viewer = mujoco.Renderer(
                 model=self._model,
@@ -138,12 +153,69 @@ class MujocoEnv(dm_env.Environment):
             self._viewer.disable_depth_rendering()
             self._viewer.disable_segmentation_rendering()
         scene_option = scene_option or self._scene_option
+
+
         self._viewer.update_scene(
             self._data, self._rendering_config.camera_id, scene_option
         )
         if scene_callback is not None:
             scene_callback(self._viewer.scene)
         return self._viewer.render()
+    
+    def step(self, action: np.ndarray) -> NamedTuple:
+        self._data.ctrl[:] = action
+        mujoco.mj_step(self._model, self._data)
+
+        cube_pos = self._data.geom_xpos[mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, "cube")]
+        end_effector = self._data.geom_xpos[mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, "actuator8")]
+
+        # building state
+
+        state = []
+        for i in range(8):
+            actuator_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, f"actuator{i+1}")
+            state.append(self._data.qpos[actuator_id])
+            state.append(self._data.qvel[actuator_id])
+        state = np.array(state)
+
+
+        # Terminating State 
+        if np.linalg.norm(cube_pos-end_effector) < 0.02 or self.timesteps == self.max_timesteps:
+            reward = 1000
+            return dm_env.termination(reward = reward, observation=state)
+        else:
+            reward = -np.linalg.norm(cube_pos-end_effector)
+            self.timesteps += 1
+            return dm_env.transition(reward = 0, observation = state)
+
+        
+    def action_spec(self):
+        return specs.Array(
+            (8,),
+            dtype = np.float32,
+            name = "action"
+        )
+
+    def observation_spec(self):
+        return specs.Array(
+            (16,),
+            dtype = np.float32,
+            name = "observation"
+        )
+    
+    def reset(self):
+        # self._data.qpos = np.zeros((9,))
+        # self._data.qvel = np.zeros((9,))
+        self.timesteps = 0
+        state = []
+        for i in range(8):
+            actuator_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, f"actuator{i+1}")
+            state.append(self._data.qpos[actuator_id])
+            state.append(self._data.qvel[actuator_id])
+        state = np.array(state)
+
+        return TimeStep(step_type=StepType.FIRST, reward = None, discount=None, observation=state)
+        
 
     def close(self) -> None:
         """Clean up resources associated with the environment."""
@@ -155,6 +227,28 @@ class MujocoEnv(dm_env.Environment):
         """Returns True if the simulation time has exceeded the time limit."""
         return self._data.time >= self._time_limit
 
+    def capture_video(self, duration: float, fps: int = 30, filename: str = "output.mp4"):
+        """Capture a video of the simulation and save it as an MP4 file.
+
+        Args:
+            duration: Duration of the video in seconds.
+            fps: Frames per second for the output video.
+            filename: Name of the output video file.
+        """
+        frames = []
+        steps = int(duration / self.control_dt)
+        
+        for _ in range(steps):
+            # Simulate one step
+            self.step(self.action_spec().generate_value())
+            
+            # Render the frame
+            frame = self.render()
+            frames.append(frame)
+
+        # Save the video
+        imageio.mimsave(filename, frames, fps=fps)
+        print(f"Video saved as {filename}")
     # Convenience methods.
 
     def forward(self) -> None:
