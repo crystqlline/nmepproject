@@ -4,4 +4,4 @@ from mujoco_env import MujocoEnv
 env = MujocoEnv(xml_path="xmls/panda.xml")
 
 # Capture a 10-second video at 30 fps
-env.capture_video(duration=10, fps=30, filename="simulation_video.mp4")
+env.captures_video(duration=50, fps=30, filename="simulation_video1.mp4")

@@ -102,6 +102,7 @@ class ActorCritic(nn.Module):
         self.optim = torch.optim.Adam(self.parameters(), lr=lr)
         self.to(self.device)
         self.accumulated_rewards = []
+        self.test_rewards = []
 
     def forward(self, observation):
         observation = as_tensor(observation, device=self.device)
@@ -152,7 +153,7 @@ class ActorCritic(nn.Module):
         video_step_counter = 0
         video_creator = []
 
-
+        episode_rewards =0
         for step in tqdm(range(steps)):
             value, policy = self(state.observation)
             action, logp_a = self.actor.get_action(policy)
@@ -162,8 +163,11 @@ class ActorCritic(nn.Module):
             state, reward, done, _ = next_state, next_state.reward, next_state.step_type is StepType.LAST, "your mother"
             self.actor["episode_rewards"].append(reward)
 
+            episode_rewards+= reward
 
-            if step % 5000 or video_step_counter != 0:
+
+
+            if step % 500000==0 or video_step_counter != 0:
                 video_step_counter += 1
                 frame = env.render()
                 video_creator.append(frame)
@@ -174,30 +178,29 @@ class ActorCritic(nn.Module):
                     video_step_counter = 0
 
 
-
-
-                
-
             if done:
                 # Perform update at the end of each episode
                 pi_loss, v_loss = self.update()
                 stats["pi_loss"].append(pi_loss.item())
                 stats["v_loss"].append(v_loss.item())
 
+                self.accumulated_rewards.append(episode_rewards)
+                episode_rewards = 0
                 # Test policy
-                render = episode_num % 50 == 0
-                test_result = self.test(env, render=render)
-                print("Bitch ass test result", test_result)
-                if test_result > max_reward:
-                    max_reward = test_result
-                    model_path = (
-                        self.model_dir +"/" + f"a2c-panda-{int(test_result)}-{step}.pt"
-                    )
-                    torch.save(self.state_dict(), model_path)
+                if episode_num % 10 == 0:
+                    render = False
+                    test_result = self.test(env, render=render)
+                    print("Bitch ass test result", test_result)
+                    if test_result > max_reward:
+                        max_reward = test_result
+                        model_path = (
+                            self.model_dir +"/" + f"a2c-panda-{int(test_result)}-{step}.pt"
+                        )
+                        torch.save(self.state_dict(), model_path)
                 state = env.reset()
                 episode_num += 1
 
-                self.save_reward_plot(plot_path = "reward_plot/rewards_plot.png" )
+                self.save_reward_plot(plot_path = "rewards_plot/rewards_plot.png" )
 
 
         model_path = (
@@ -205,10 +208,11 @@ class ActorCritic(nn.Module):
         )
         torch.save(self.state_dict(), model_path)
 
-        self.save_reward_plot(plot_path = "reward_plot/rewards_plot.png" )
+        self.save_reward_plot(plot_path = "rewards_plot/rewards_plot.png" )
         return stats
     
     def save_reward_plot(self, plot_path):
+
         plt.figure(figsize=(10, 6))
         plt.plot(np.array(self.accumulated_rewards), label="Rewards", color='blue', linestyle='-', marker='o', markersize=4)
         plt.title("Rewards Over Time", fontsize=16)
@@ -221,10 +225,25 @@ class ActorCritic(nn.Module):
         # Save the plot
         plt.savefig(plot_path)
         plt.show()
+        plt.close()
+
         
+        plt.figure(figsize=(10, 6))
+        plt.plot(np.array(self.test_rewards), label="Rewards", color='blue', linestyle='-', marker='o', markersize=4)
+        plt.title("Rewards Over Time", fontsize=16)
+        plt.xlabel("Episodes", fontsize=14)
+        plt.ylabel("Reward", fontsize=14)
+        plt.legend(fontsize=12)
+        plt.grid(True)
+        plt.tight_layout()
+
+        # Save the plot
+        plt.savefig(plot_path[:-4] + "test.png")
+        plt.show()
+        plt.close()
 
     def test(
-        self, env, max_steps=25_000, test_iterations=10, render=False, sleep_time=None
+        self, env, max_steps=25_000, test_iterations=5, render=False, sleep_time=None
     ):
         episode_rewards = []
 
@@ -264,7 +283,7 @@ class ActorCritic(nn.Module):
             render = False
 
         mean_reward = sum(episode_rewards) / len(episode_rewards)
-        self.accumulated_rewards.append(mean_reward)
+        self.test_rewards.append(mean_reward)
         self.clear_buffers()
         return mean_reward
 

@@ -102,6 +102,8 @@ class MujocoEnv(dm_env.Environment):
         self.max_timesteps = max_timesteps
         self.timesteps = 0
 
+        self.prev_geom_xpos = None
+
     def render(
         self,
         depth: bool = False,
@@ -165,28 +167,40 @@ class MujocoEnv(dm_env.Environment):
     def step(self, action: np.ndarray) -> NamedTuple:
         self._data.ctrl[:] = action
         mujoco.mj_step(self._model, self._data)
+        model = self._model
+        data = self._data
+
+        # for geom_id in range(model.ngeom):
+        #     geom_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
+        #     print(geom_name)
+
+
+
+
+
 
         cube_pos = self._data.geom_xpos[mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, "cube")]
-        end_effector = self._data.geom_xpos[mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, "actuator8")]
+
+        finger1 = self._data.xpos[-1]
+        finger2 = self._data.xpos[-2]
+        end_effector = (finger1 + finger2) / 2
 
         # building state
-
         state = []
-        for i in range(8):
-            actuator_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, f"actuator{i+1}")
-            state.append(self._data.qpos[actuator_id])
-            state.append(self._data.qvel[actuator_id])
+        for i in range(self._model.njnt):
+            state.append(self._data.qpos[i])
+            state.append(self._data.qvel[i])
+        [state.append(x) for x in cube_pos]
+
         state = np.array(state)
 
-
-        # Terminating State 
-        if np.linalg.norm(cube_pos-end_effector) < 0.02 or self.timesteps == self.max_timesteps:
-            reward = 1000
+        if np.linalg.norm(cube_pos-end_effector) < 0.02 or  self.timesteps == self.max_timesteps:
+            reward = -np.linalg.norm(cube_pos-end_effector)*(self.max_timesteps - self.timesteps)*100
             return dm_env.termination(reward = reward, observation=state)
         else:
-            reward = -np.linalg.norm(cube_pos-end_effector)
+            reward = -np.linalg.norm(cube_pos-end_effector)*100
             self.timesteps += 1
-            return dm_env.transition(reward = 0, observation = state)
+            return dm_env.transition(reward = reward, observation = state)
 
         
     def action_spec(self):
@@ -204,14 +218,30 @@ class MujocoEnv(dm_env.Environment):
         )
     
     def reset(self):
-        # self._data.qpos = np.zeros((9,))
-        # self._data.qvel = np.zeros((9,))
+        #Reset Box Pos
+        cube_pos = np.random.rand(3,)
+
+        self._data.geom_xpos[mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, "cube")] = cube_pos
+
+        cube_pos = self._data.geom_xpos[mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, "cube")] 
+
+        self._data.qpos = np.zeros_like(self._data.qpos)
+        self._data.qvel = np.zeros_like(self.data.qvel)
+        
+        # print(self._data.geom_xpos("cube"))
+        # for body_id in range(self._model.nbody):
+        #     body_name = mujoco.mj_id2name(self._model, mujoco.mjtObj.mjOBJ_GEOM, body_id)
+        #     print(body_name)
+        #     print(mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, "cube"))
+        #     # Process body here
+
+
         self.timesteps = 0
         state = []
-        for i in range(8):
-            actuator_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, f"actuator{i+1}")
-            state.append(self._data.qpos[actuator_id])
-            state.append(self._data.qvel[actuator_id])
+        for i in range(self._model.njnt):
+            state.append(self._data.qpos[i])
+            state.append(self._data.qvel[i])
+        [state.append(x) for x in cube_pos]
         state = np.array(state)
 
         return TimeStep(step_type=StepType.FIRST, reward = None, discount=None, observation=state)
@@ -227,7 +257,7 @@ class MujocoEnv(dm_env.Environment):
         """Returns True if the simulation time has exceeded the time limit."""
         return self._data.time >= self._time_limit
 
-    def capture_video(self, duration: float, fps: int = 30, filename: str = "output.mp4"):
+    def captures_video(self, duration: float, fps: int = 30, filename: str = "output.mp4"):
         """Capture a video of the simulation and save it as an MP4 file.
 
         Args:
@@ -236,11 +266,19 @@ class MujocoEnv(dm_env.Environment):
             filename: Name of the output video file.
         """
         frames = []
+        print(duration)
         steps = int(duration / self.control_dt)
+        print(steps)
+
         
-        for _ in range(steps):
+        for x in range(steps):
             # Simulate one step
-            self.step(self.action_spec().generate_value())
+            joint = int(x / steps * 8)
+
+            potential_value = np.zeros((8,))
+            potential_value[joint] = 1.0
+
+            self.step(potential_value)
             
             # Render the frame
             frame = self.render()
@@ -252,7 +290,7 @@ class MujocoEnv(dm_env.Environment):
     # Convenience methods.
 
     def forward(self) -> None:
-        mujoco.mj_forward(self._model, self._data)
+        mujoco.mj_forward(self._model, self.control_dt)
     # Accessors.
 
     @property
