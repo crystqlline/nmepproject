@@ -1,11 +1,17 @@
-import gym
+import os
 import time
+import imageio
 import torch
 import torch.nn as nn
 import torch.distributions as distributions
+import matplotlib.pyplot as plt
+import numpy as np
 
 from tqdm import tqdm
+from envs.mujoco_env import MujocoEnv
 from utils.misc import as_numpy, as_tensor, get_device, init_mlp
+from dm_env import specs, TimeStep, StepType
+
 
 
 class Actor(nn.Module):
@@ -77,7 +83,7 @@ class ActorCritic(nn.Module):
         super().__init__()
         self.device = get_device(device=device)
         self.model_dir = model_dir
-        self.model_dir.mkdir(exist_ok=True, parents=True)
+        os.makedirs(self.model_dir, exist_ok=True)
         self.gamma = gamma
 
         actor_sizes = (observation_space.shape[0], *hidden_sizes, action_space.shape[0])
@@ -95,6 +101,7 @@ class ActorCritic(nn.Module):
 
         self.optim = torch.optim.Adam(self.parameters(), lr=lr)
         self.to(self.device)
+        self.accumulated_rewards = []
 
     def forward(self, observation):
         observation = as_tensor(observation, device=self.device)
@@ -136,18 +143,40 @@ class ActorCritic(nn.Module):
         self.clear_buffers()
         return actor_loss, critic_loss
 
-    def train(self, env, steps):
-        state = env.reset()
+    def train(self, env:MujocoEnv, steps):
+        state: TimeStep = env.reset()
         stats = {"reward_history": [], "pi_loss": [], "v_loss": []}
-        max_reward = -100
+        max_reward = -1000000000000
         episode_num = 0
 
+        video_step_counter = 0
+        video_creator = []
+
+
         for step in tqdm(range(steps)):
-            value, policy = self(state)
+            value, policy = self(state.observation)
             action, logp_a = self.actor.get_action(policy)
 
-            state, reward, done, _ = env.step(as_numpy(action))
+            next_state: TimeStep = env.step(as_numpy(action))
+
+            state, reward, done, _ = next_state, next_state.reward, next_state.step_type is StepType.LAST, "your mother"
             self.actor["episode_rewards"].append(reward)
+
+
+            if step % 5000 or video_step_counter != 0:
+                video_step_counter += 1
+                frame = env.render()
+                video_creator.append(frame)
+                if video_step_counter == 1000:
+                    print("Bitchass saving")
+                    imageio.mimsave(f"videos/video_{step}.mp4", video_creator, fps=30)
+                    video_creator = []
+                    video_step_counter = 0
+
+
+
+
+                
 
             if done:
                 # Perform update at the end of each episode
@@ -158,15 +187,41 @@ class ActorCritic(nn.Module):
                 # Test policy
                 render = episode_num % 50 == 0
                 test_result = self.test(env, render=render)
+                print("Bitch ass test result", test_result)
                 if test_result > max_reward:
                     max_reward = test_result
                     model_path = (
-                        self.model_dir / f"a2c-antv3-{int(test_result)}-{step}.pt"
+                        self.model_dir +"/" + f"a2c-panda-{int(test_result)}-{step}.pt"
                     )
                     torch.save(self.state_dict(), model_path)
                 state = env.reset()
                 episode_num += 1
+
+                self.save_reward_plot(plot_path = "reward_plot/rewards_plot.png" )
+
+
+        model_path = (
+            self.model_dir +"/" + f"a2c-panda-end.pt"
+        )
+        torch.save(self.state_dict(), model_path)
+
+        self.save_reward_plot(plot_path = "reward_plot/rewards_plot.png" )
         return stats
+    
+    def save_reward_plot(self, plot_path):
+        plt.figure(figsize=(10, 6))
+        plt.plot(np.array(self.accumulated_rewards), label="Rewards", color='blue', linestyle='-', marker='o', markersize=4)
+        plt.title("Rewards Over Time", fontsize=16)
+        plt.xlabel("Episodes", fontsize=14)
+        plt.ylabel("Reward", fontsize=14)
+        plt.legend(fontsize=12)
+        plt.grid(True)
+        plt.tight_layout()
+
+        # Save the plot
+        plt.savefig(plot_path)
+        plt.show()
+        
 
     def test(
         self, env, max_steps=25_000, test_iterations=10, render=False, sleep_time=None
@@ -176,16 +231,21 @@ class ActorCritic(nn.Module):
         mse_threshold = 1e-4
         stationary_count_threshold = 50
 
-        for episode in range(test_iterations):
+        for episode in tqdm(range(test_iterations)):
+
             stationary_count = 0
             total_reward = 0
             state_curr = env.reset()
             for step in range(max_steps):
-                _, policy = self(state_curr)
+                _, policy = self(state_curr.observation)
                 action, _ = self.actor.get_action(policy)
-                state_next, reward, done, _ = env.step(as_numpy(action))
 
-                mse = ((state_curr - state_next) ** 2).sum()
+
+                next_state: TimeStep = env.step(as_numpy(action))
+
+                state_next, reward, done, _ = next_state, next_state.reward, next_state.step_type is StepType.LAST, "your mother but in test"
+
+                mse = ((state_curr.observation - state_next.observation) ** 2).sum()
                 if mse < mse_threshold:
                     stationary_count += 1
                 if stationary_count >= stationary_count_threshold:
@@ -204,6 +264,7 @@ class ActorCritic(nn.Module):
             render = False
 
         mean_reward = sum(episode_rewards) / len(episode_rewards)
+        self.accumulated_rewards.append(mean_reward)
         self.clear_buffers()
         return mean_reward
 
@@ -224,35 +285,3 @@ def test_policy(a2c, env, max_steps):
     env.render()
     a2c.clear_buffers()
 
-
-if __name__ == "__main__":
-    max_episodes = 10000
-    max_steps = 5000
-
-    # env = gym.make('MountainCarContinuous-v0')
-    env = gym.make("HalfCheetah-v3")
-
-    a2c = ActorCritic(
-        observation_space=env.observation_space, action_space=env.action_space,
-    )
-
-    for episode in tqdm(range(max_episodes), desc="Training agent"):
-        state = env.reset()
-        rewards = []
-
-        for step in range(max_steps):
-            value, policy = a2c(state)
-            action, logp_a = a2c.actor.get_action(policy)
-
-            state, reward, done, _ = env.step(action.numpy())
-            a2c.actor["episode_rewards"].append(reward)
-
-            if done:
-                pi_loss, v_loss = a2c.update()
-                break
-
-        # if episode % 200 == 0:
-        #     test_policy(a2c, env, max_steps)
-
-    while input("Enter 'quit' to exit") != "quit":
-        test_policy(a2c, env, max_steps)
