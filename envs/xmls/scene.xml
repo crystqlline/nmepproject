@@ -19,5 +19,6 @@
   <worldbody>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+    <camera name="chriscamera" pos="0 -1 2" euler="0.785 0 0" fovy="65"/>
   </worldbody>
 </mujoco>
