@@ -164,20 +164,20 @@ class MujocoEnv(dm_env.Environment):
             scene_callback(self._viewer.scene)
         return self._viewer.render()
     
+    def rescale_action(self, action):
+        scale = np.array([2.9, 1.76, 2.9, 3/2, 2.9, 3.75/2, 2.9, 255/2])
+        offset = np.array([0, 0, 0, -3/2, 0, 3.75/2, 0, 255/2])
+        action = scale * action + offset
+        return action
+    
     def step(self, action: np.ndarray) -> NamedTuple:
+        # Rescale actions to proper setpoint values
+        action = self.rescale_action(action)
+
         self._data.ctrl[:] = action
         mujoco.mj_step(self._model, self._data)
         model = self._model
         data = self._data
-
-        # for geom_id in range(model.ngeom):
-        #     geom_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
-        #     print(geom_name)
-
-
-
-
-
 
         cube_pos = self._data.geom_xpos[mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_GEOM, "cube")]
 
@@ -195,10 +195,10 @@ class MujocoEnv(dm_env.Environment):
         state = np.array(state)
 
         if np.linalg.norm(cube_pos-end_effector) < 0.02 or  self.timesteps == self.max_timesteps:
-            reward = -np.linalg.norm(cube_pos-end_effector)*(self.max_timesteps - self.timesteps)*100
+            reward = -np.linalg.norm(cube_pos-end_effector)*(self.max_timesteps - self.timesteps)
             return dm_env.termination(reward = reward, observation=state)
         else:
-            reward = -np.linalg.norm(cube_pos-end_effector)*100
+            reward = -np.linalg.norm(cube_pos-end_effector)
             self.timesteps += 1
             return dm_env.transition(reward = reward, observation = state)
 
@@ -212,7 +212,7 @@ class MujocoEnv(dm_env.Environment):
 
     def observation_spec(self):
         return specs.Array(
-            (16,),
+            (21,),
             dtype = np.float32,
             name = "observation"
         )

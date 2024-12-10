@@ -157,6 +157,7 @@ class ActorCritic(nn.Module):
         for step in tqdm(range(steps)):
             value, policy = self(state.observation)
             action, logp_a = self.actor.get_action(policy)
+            action = nn.functional.tanh(action)
 
             next_state: TimeStep = env.step(as_numpy(action))
 
