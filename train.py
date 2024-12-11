@@ -3,18 +3,26 @@ import imageio
 import numpy as np
 from stable_baselines3 import PPO, A2C, DQN
 from stable_baselines3.common.env_util import make_vec_env
-import tqdm
 
 from mujoco_gym_env import PandaArm
 
 xml_path = "/home/aadia/nmepproject/envs/xmls/scene.xml"
+checkpoint_path = "ppo_panda_574"
+
+training_timesteps = 300000
+
 env = PandaArm(xml_path=xml_path,
                 max_timesteps=1000,
                )
 
+if checkpoint_path is not None:
+    model = PPO.load(checkpoint_path, env = env)
+else:
+    model = PPO("MlpPolicy", env, verbose=1, device = "cuda")
 
+model = model.learn(total_timesteps=training_timesteps)
 
-model = PPO.load("ppo_panda_574")
+model.save(f"ppo_panda_{np.random.randint(10000000000)}")
 
 
 # Test
@@ -22,18 +30,21 @@ model = PPO.load("ppo_panda_574")
 
 vec_env = make_vec_env(PandaArm, n_envs=1, env_kwargs=dict(xml_path=xml_path, max_timesteps=1000))
 obs = vec_env.reset()
-n_steps = 100
+n_steps = 200
 
 frames = []
-pbar = tqdm.tqdm(range(n_steps))
-for step in pbar:
+for step in range(n_steps):
     action, _ = model.predict(obs, deterministic=True)
+    print(f"Step {step + 1}")
+    print("Action: ", action)
     obs, reward, done, info = vec_env.step(action)
+    print("obs=", obs, "reward=", reward, "done=", done)
     frames.append(vec_env.render())
-    pbar.set_description(f"Reward {reward}")
-
 
     if done:
+        # Note that the VecEnv resets automatically
+        # when a done signal is encountered
+        print("Goal reached!", "reward=", reward)
         break
 
 print(len(frames))

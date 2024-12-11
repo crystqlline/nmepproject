@@ -102,7 +102,6 @@ class MujocoEnv(dm_env.Environment):
         self.max_timesteps = max_timesteps
         self.timesteps = 0
 
-        self.prev_geom_xpos = None
 
     def render(
         self,
@@ -194,13 +193,14 @@ class MujocoEnv(dm_env.Environment):
 
         state = np.array(state)
 
-        if np.linalg.norm(cube_pos-end_effector) < 0.02 or  self.timesteps == self.max_timesteps:
+        if np.linalg.norm(cube_pos-end_effector) < 0.02 or self.timesteps == self.max_timesteps:
             reward = -np.linalg.norm(cube_pos-end_effector)*(self.max_timesteps - self.timesteps)
             return dm_env.termination(reward = reward, observation=state)
         else:
             reward = -np.linalg.norm(cube_pos-end_effector)
             self.timesteps += 1
             return dm_env.transition(reward = reward, observation = state)
+
 
         
     def action_spec(self):
